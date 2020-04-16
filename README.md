@@ -1,7 +1,7 @@
 Covid-19 Italian Data Dashboard
 ================
 
-Quest’applicazione è stata sviluppata dell’Ing. Danilo Lofaro del
+Quest’applicazione raggiungibile su [https://danilolofaro.shinyapps.io/COVID_app/](https://danilolofaro.shinyapps.io/COVID_app/) è stata sviluppata dell’Ing. Danilo Lofaro del
 [de-Health Lab](http://www.dehealthlab.it/) - [DIMEG
 (UNICAL)](https://www.unical.it/portale/strutture/dipartimenti_240/dimeg/)
 nell’ambito dell’iniziativa [UNICAL vs
