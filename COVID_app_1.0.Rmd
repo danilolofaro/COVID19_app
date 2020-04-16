@@ -1,0 +1,910 @@
+---
+title: "Visualizzazione Dati Covid-19"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    logo: logo5.png
+    favicon: favicon_de.ico
+    orientation: rows
+    storyboard: true
+    vertical_layout: fill
+    social: menu
+    theme: simplex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.height=8, fig.width=11, echo=FALSE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(flexdashboard)
+library(ggsci)
+library(plotly)
+library(geofacet)
+library(shiny)
+```
+
+```{r data_population}
+ds_ita_pop <- read_csv("./DCIS_POPRES1_02042020122042439.csv")
+
+ds_regioni <- ds_ita_pop %>%
+  filter(str_detect(ITTER107,pattern = "^IT[A-G][1-9]$"),
+         Sesso == "totale",
+         `Età` == "totale",
+         `Stato civile` == "totale") %>%
+  mutate(Territorio = str_trim(str_remove(Territorio, "\\/.*")),
+         Territorio = str_replace(Territorio, pattern = "Provincia Autonoma", replacement = "P.A."),
+         Territorio = str_replace(Territorio, pattern = "Friuli-Venezia", replacement = "Friuli Venezia")) %>%
+  mutate(pop100k = round(Value/100000,0))
+
+```
+
+```{r italy_grid}
+italy_grid4 <- data.frame(
+  row = c(1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4, 4, 5, 5, 6, 6, 6, 6, 7, 8, 8),
+  col = c(1, 3, 4, 1, 2, 3, 4, 1, 2, 2, 3, 4, 3, 4, 1, 3, 4, 5, 4, 3, 4),
+  code = c("VAL", "TRE", "BLZ", "PIE", "LOM", "VEN", "FRI", "LIG", "EMI", "TOS", "UMB", "MAR", "LAZ", "ABR", "SAR", "CAM", "MOL", "PUG", "BAS", "SIC", "CAL"),
+  name = c("Valle d'Aosta", "Trento", "Bolzano", "Piemonte", "Lombardia", "Veneto", "Friuli-Venezia Giulia", "Liguria", "Emilia-Romagna", "Toscana", "Umbria", "Marche", "Lazio", "Abruzzo", "Sardegna", "Campania", "Molise", "Puglia", "Basilicata", "Sicilia", "Calabria"),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r data_covid_nat}
+ds_covid_ita <- read_csv("https://raw.githubusercontent.com/pcm-dpc/COVID-19/master/dati-andamento-nazionale/dpc-covid19-ita-andamento-nazionale.csv")
+```
+
+```{r data_covid_reg}
+ds_covid_ita_reg <- read_csv("https://raw.githubusercontent.com/pcm-dpc/COVID-19/master/dati-regioni/dpc-covid19-ita-regioni.csv")
+```
+
+```{r ds_mortality}
+ds_ita_mort <- read_csv("./DCIS_CMORTE1_RES_03042020130711277.csv")
+```
+
+```{r ds_covid_nat}
+ds_covid_nat <- ds_covid_ita %>%
+  mutate(data = as.Date(data)) %>%
+  rename(
+    date = data,
+    hospitalized = ricoverati_con_sintomi,
+    icu = terapia_intensiva,
+    admitted = totale_ospedalizzati, 
+    home_quarantine = isolamento_domiciliare,
+    tot_positive = totale_positivi,
+    new_totPositive = variazione_totale_positivi,
+    new_positive = nuovi_positivi, 
+    discharged_recovered = dimessi_guariti, 
+    tot_deceased = deceduti, 
+    tot_cases = totale_casi, 
+    tot_covidTest = tamponi) %>%
+  mutate(
+    population = sum(ds_regioni$Value),
+    #new_cases = tot_cases - lag(tot_cases),
+    new_death = tot_deceased - lag(tot_deceased),
+    new_test = tot_covidTest - lag(tot_covidTest),
+    rate_cumIncidence = (tot_cases/population)*100000,
+    day_incidenceRate = (new_positive/population)*100000,
+    rate_prevalence = (tot_positive/population)*100000,
+    day_prevalenceRate = (new_totPositive/population)*100000, 
+    rate_mortality = (tot_deceased/population)*100000,
+    day_mortalityRate = (new_death/population)*100000,
+    rate_test = (tot_covidTest/population)*100000,
+    day_testRate = (new_test/population)*100000,
+    perc_fatality = tot_deceased/tot_cases,
+    perc_hosp = admitted/tot_cases,
+    perc_icu = icu/tot_cases,
+    perc_positive = new_positive/new_test,
+    code = "ITA", 
+    regione = "Italia")
+
+ds_covid_nat_long <- ds_covid_nat %>%
+  select(date, code, regione, starts_with("tot"), starts_with("new"), starts_with("rate"), starts_with("day")) %>%
+rename_all(~c("date", "code", "regione","Attualmente Positivi", "Totale Decessi", "Totale Casi", "Totale Tamponi", "Nuovi Positivi", "Nuovi Casi", "Decessi Giornalieri", "Tamponi Giornalieri", "Incidenza Cumulativa per 100.000 pop", "Prevalenza per 100.000 pop", "Mortalità per 100.000 pop", "Tamponi effettuati per 100.000 pop", "Incidenza Giornaliera per 100.000 pop", "Variazione Prevalenza per 100.000 pop", "Mortalità Giornaliera per 100.000 pop", "Tamponi Giornalieri effettuati per 100.000 pop")) %>%
+  pivot_longer(
+    cols = `Attualmente Positivi`:`Tamponi Giornalieri effettuati per 100.000 pop`, 
+    names_to = "vars") %>%
+  complete(date, nesting(code, regione, vars), fill = list(value = 0)) %>%
+  mutate(vars = factor(vars, levels=c("Totale Casi", "Attualmente Positivi", "Totale Decessi", "Totale Tamponi", "Nuovi Casi", "Nuovi Positivi", "Decessi Giornalieri", "Tamponi Giornalieri", "Incidenza Cumulativa per 100.000 pop", "Prevalenza per 100.000 pop", "Mortalità per 100.000 pop", "Tamponi effettuati per 100.000 pop", "Incidenza Giornaliera per 100.000 pop", "Variazione Prevalenza per 100.000 pop", "Mortalità Giornaliera per 100.000 pop", "Tamponi Giornalieri effettuati per 100.000 pop"))) %>%
+  arrange(date, code, vars) %>%
+  mutate(group = factor(rep(c("Nuovi Positivi (Incidenza)", "Attualmente Positivi (Prevalenza)", "Deceduti", "Tamponi"),n()/4)),
+         set  = factor(rep(c("Cumulativi totali", "Giornalieri totali", "Cumulativi standardizzati", "Giornalieri standardizzati"), times=n()/16, each=4), levels = c("Cumulativi totali", "Giornalieri totali", "Cumulativi standardizzati", "Giornalieri standardizzati")))
+```
+
+```{r data_mortality}
+
+ds_mortality_nat <- ds_ita_mort %>%
+  filter(Sesso == "totale",
+         Territorio == "Italia",
+         TIPO_DATO15 == "MRATE") %>%
+  separate(col = CAUSEMORTE_SL, into = paste0("level",1:3), sep = "_") %>%
+  mutate(
+    mortality_rate = round(Value * 100,0),
+    death_cause = str_to_title(str_replace(string = `Causa iniziale di morte - European Short List`, pattern = ".*cui ", "")),
+    level = case_when(
+    is.na(level2) ~ 1,
+    is.na(level3) ~ 2,
+    TRUE ~ 3)) %>%
+  group_by(level1) %>%
+  mutate(sublevels = case_when(
+    sum(as.numeric(level2), na.rm = TRUE) == 0 ~ 1,
+    sum(as.numeric(level3), na.rm = TRUE) == 0 ~ 2,
+    TRUE ~ 3)) %>%
+  ungroup() %>%
+  filter(!Value == 0,
+    !level1 == "99",
+         sublevels == 1 | (sublevels == 2 & !is.na(level2)) | (sublevels == 3 & !is.na(level3))
+         ) %>%
+  select(death_cause, mortality_rate) %>%
+  add_row(death_cause = "Covid-19 *", mortality_rate = round(max(ds_covid_nat$rate_mortality*10, na.rm=T),0)) %>%
+  arrange(-mortality_rate) %>%
+  mutate(death_cause = paste0(death_cause," (",row_number(),")"),
+         col = factor(case_when(
+           str_detect(death_cause, "Covid-19") ~ 1,
+           TRUE ~ 0
+         )))
+```
+
+```{r ds_covid_reg}
+ds_covid_reg_tot <- ds_covid_ita_reg %>%
+  mutate(date = as.Date(data),
+         code = case_when(
+           str_detect(denominazione_regione, "Bolzano") ~ "BLZ",
+           str_detect(denominazione_regione, "Trento") ~ "TRE",
+           TRUE ~ toupper(str_sub(string = denominazione_regione, start = 1, end = 3))),
+         regione = denominazione_regione) %>%
+  select(-c(data, denominazione_regione, stato, codice_regione)) %>%
+  rename(hospitalized = ricoverati_con_sintomi,
+         icu = terapia_intensiva,
+         admitted = totale_ospedalizzati, 
+         home_quarantine = isolamento_domiciliare,
+         tot_positive = totale_positivi,
+         new_totPositive = variazione_totale_positivi,
+         new_positive = nuovi_positivi, 
+         discharged_recovered = dimessi_guariti, 
+         tot_deceased = deceduti, 
+         tot_cases = totale_casi, 
+         tot_covidTest = tamponi) %>%
+  mutate(tot_cases = case_when(
+    code == "LIG" & date == "2020-02-29" ~ 20,
+    code == "LIG" & date == "2020-03-01" ~ 21,
+    TRUE ~ tot_cases)) %>%
+  inner_join(ds_regioni %>% 
+               rename_all(tolower) %>%
+               select(territorio, value, pop100k), by=c("regione" = "territorio")) %>%
+  group_by(code) %>%
+  arrange(code, date) %>%
+  mutate(
+    tot_cases = case_when(
+      tot_cases - lag(tot_cases) < 0 ~ round((lead(tot_cases) + lag(tot_cases))/2,0),
+      TRUE ~ tot_cases))
+
+``` 
+
+```{r ds_perc}
+ds_perc <- ds_covid_reg_tot %>%
+  select(date:regione, admitted, icu, tot_deceased, tot_cases) %>%
+  mutate(perc_fatality = tot_deceased/tot_cases,
+    perc_hosp = admitted/tot_cases,
+    perc_icu = icu/tot_cases) %>%
+  select(-c(admitted:tot_cases)) %>%
+  bind_rows(ds_covid_nat %>%
+              select(date, code, regione, perc_fatality:perc_icu)) %>%
+  rename_at(.vars = vars(starts_with("perc")), ~c("Tasso di Fatalità", "Tasso di Ospedalizzazioni", "Tasso di Ricoveri Terapia Intensiva")) %>%
+  complete(date, nesting(code, regione), fill = list("Tasso di Fatalità"=0, "Tasso di Ospedalizzazioni"=0, "Tasso di Ricoveri Terapia Intensiva" = 0))
+```
+
+```{r ds_plot_reg}
+ds_plot_reg <- ds_covid_reg_tot %>%
+  rename(population = value) %>%
+  mutate(
+    #new_cases = tot_cases - lag(tot_cases),
+    start = row_number(),
+    new_death = tot_deceased - lag(tot_deceased),
+    new_test = case_when(
+      start == 1 ~ new_positive,
+      tot_covidTest - lag(tot_covidTest) < new_positive ~ new_positive,
+      tot_covidTest - lag(tot_covidTest) <= 0 ~ new_positive,
+      TRUE ~ (tot_covidTest - lag(tot_covidTest))),
+    rate_cumIncidence = (tot_cases/population)*100000,
+    day_incidenceRate = (new_positive/population)*100000,
+    rate_prevalence = (tot_positive/population)*100000,
+    day_prevalenceRate = (new_totPositive/population)*100000, 
+    rate_mortality = (tot_deceased/population)*100000,
+    day_mortalityRate = (new_death/population)*100000,
+    rate_test = (tot_covidTest/population)*100000,
+    day_testRate = (new_test/population)*100000) %>%
+  select(date, code, regione, starts_with("tot"), starts_with("new"), starts_with("rate"), starts_with("day")) %>%
+  rename_all(~c("date", "code", "regione","Attualmente Positivi", "Totale Decessi", "Totale Casi", "Totale Tamponi", "Nuovi Positivi", "Nuovi Casi", "Decessi Giornalieri", "Tamponi Giornalieri", "Incidenza Cumulativa per 100.000 pop", "Prevalenza per 100.000 pop", "Mortalità per 100.000 pop", "Tamponi effettuati per 100.000 pop", "Incidenza Giornaliera per 100.000 pop", "Variazione Prevalenza per 100.000 pop", "Mortalità Giornaliera per 100.000 pop", "Tamponi Giornalieri effettuati per 100.000 pop")) %>%
+  pivot_longer(
+    cols = `Attualmente Positivi`:`Tamponi Giornalieri effettuati per 100.000 pop`, 
+    names_to = "vars") %>%
+  complete(date, nesting(code, regione, vars), fill = list(value = 0)) %>%
+  mutate(vars = factor(vars, levels=c("Totale Casi", "Attualmente Positivi", "Totale Decessi", "Totale Tamponi", "Nuovi Casi", "Nuovi Positivi", "Decessi Giornalieri", "Tamponi Giornalieri", "Incidenza Cumulativa per 100.000 pop", "Prevalenza per 100.000 pop", "Mortalità per 100.000 pop", "Tamponi effettuati per 100.000 pop", "Incidenza Giornaliera per 100.000 pop", "Variazione Prevalenza per 100.000 pop", "Mortalità Giornaliera per 100.000 pop", "Tamponi Giornalieri effettuati per 100.000 pop"))) %>%
+  arrange(date, code, vars) %>%
+  mutate(group = factor(rep(c("Nuovi Positivi (Incidenza)", "Attualmente Positivi (Prevalenza)", "Deceduti", "Tamponi"),n()/4)),
+         set  = factor(rep(c("Cumulativi totali", "Giornalieri totali", "Cumulativi standardizzati", "Giornalieri standardizzati"), times=n()/16, each=4), levels = c("Cumulativi totali", "Giornalieri totali", "Cumulativi standardizzati", "Giornalieri standardizzati"))) %>%
+  bind_rows(ds_covid_nat_long)
+```
+
+```{r ggplotly_geofacet_func}
+
+geofacet_plotly <- function(g, grid) {
+  
+  ngrid <- NROW(grid)
+  npanel <- max(grid$row)*max(grid$col)*2
+    
+  grid_miss <- grid %>% 
+  complete(col, nesting(row)) %>% 
+  filter(is.na(code)) %>% 
+  arrange(row,col) %>%
+  mutate(el1 = (max(col)*2*(row-1)) + (2*col),
+         el2 = (max(col)*2*(row-1)) + (2*col) -1)
+  
+  miss_panel <- sort(c(grid_miss$el1,grid_miss$el2))
+  
+  move_axis <- grid_miss %>%
+    select(row,col) %>%
+    filter(col==1) %>%
+    inner_join(grid %>%
+                 group_by(row) %>%
+                 slice(1) %>%
+                 select(row,col) %>%
+                 rename(col2 = col), by="row") %>%
+    mutate(row = paste0("yaxis",row),
+           col2 = paste0("x",col2)) %>%
+    bind_rows(grid_miss %>%
+                select(row,col) %>%
+                filter(row==max(row)) %>%
+                inner_join(grid %>%
+                             group_by(col) %>%
+                             slice(n()) %>%
+                             select(row,col) %>%
+                             rename(col2 = row), by="col") %>%
+                mutate(row=paste0("xaxis",col),
+                       col2=paste0("y",col2))) %>%
+    select(-col) %>%
+    mutate(row = str_replace(row,"axis1","axis"))
+    
+  
+  p <- ggplotly(g) 
+  
+  for(i in 1:ngrid) {
+    rpt <- length(p$x$data[[i]]$text)
+    ntraces <- length(p$x$data)/ngrid
+    for(j in 0:(ntraces-1)) {
+      p$x$data[[i+(ngrid*j)]]$text <- rep(grid$code[i], rpt)
+      }
+  }
+  
+  for(i in 1:npanel) {
+    if (i %in% miss_panel) {
+      p$x$layout$shapes[[i]]$fillcolor <- "transparent"
+      p$x$layout$shapes[[i]]$line$color <- "transparent"
+    }
+  }
+  
+  for(i in 1:length(p$x$layout$annotations)) {
+    if(str_detect(p$x$layout$annotations[[i]]$text, pattern = "\\S")) {
+      p$x$layout$annotations[[i]]$text <- paste0("<b>", p$x$layout$annotations[[i]]$text, "</b>")
+    }
+  }
+  
+  for(i in 1:NROW(move_axis)) {
+    axis <- as.character(move_axis[i,"row"])
+    p$x$layout[[axis]]$anchor <- as.character(move_axis[i,"col2"])
+  }
+  
+  p$x$layout$annotations[[1]]$y <- -.035
+  p$x$layout$annotations[[2]]$x <- -.04
+  
+  p
+        
+}
+
+```
+
+```{r selected}
+selected <- function(col, input) {
+  if (length(input) == 0) {
+    rep(TRUE, length(col))
+  } else {
+    col %in% input
+  }
+}
+```
+
+```{r df_sel}
+
+df_sel <- reactive({
+  ds_plot_reg %>%
+    ungroup() %>%
+    filter(regione %in% input$region,
+           group == input$trace,
+           date >= min(input$dateRange),
+           date <= max(input$dateRange))
+})
+
+```
+
+```{r df_selPerc}
+
+df_sel_perc <- reactive({
+  ds_perc %>%
+    ungroup() %>%
+    filter(regione %in% input$region,
+           date >= min(input$dateRange),
+           date <= max(input$dateRange))
+})
+
+```
+
+```{r df_sel_geo}
+
+df_sel_geo <- reactive({
+  ds_covid_reg_tot %>%
+    filter(tot_cases >= pop100k) %>%
+    mutate(day_start = row_number()) %>%
+    select(date,code, day_start) %>% 
+    inner_join(ds_plot_reg %>% ungroup()) %>%
+    arrange(regione, day_start) %>%
+    filter(vars == input$set)
+  # %>%
+  #   filter(vars == input$trace)
+})
+
+labygeo <- reactive({
+  lab <- df_sel_geo() %>%
+    ungroup() %>%
+    mutate_if(is.factor, as.character) %>%
+    slice(1) %>%
+    pull(vars)
+  })
+
+```
+
+
+Sidebar {.sidebar data-width=275}
+======================================================================
+
+```{r sidebar_UI}
+# Define inputs
+selectizeInput("region", "Regione (max 5):", 
+               # choices = c("Campania","Calabria","Puglia","Sicilia"), 
+               choices = c("Italia", "Abruzzo", "Basilicata", "P.A. Bolzano", "Calabria", "Campania", "Emilia-Romagna", "Friuli Venezia Giulia", "Lazio", "Liguria", "Lombardia", "Marche", "Molise", "Piemonte", "Puglia", "Sardegna", "Sicilia", "Toscana", "P.A. Trento", "Umbria", "Valle d'Aosta", "Veneto"),
+               selected = "Italia", multiple = TRUE,
+               options = list(maxItems = 5))
+
+selectInput("trace", "Dati selezionati:",
+            choices = c("Nuovi Positivi (Incidenza)", "Attualmente Positivi (Prevalenza)", "Deceduti", "Tamponi"),
+            selectize = FALSE)
+
+fluidRow(
+        column(
+            width = 12,
+            column(
+                width = 12,
+                sliderInput("dateRange", "Date da visualizzare:", 
+            min = min(ds_plot_reg$date), max=max(ds_plot_reg$date), 
+            value =c(min(ds_plot_reg$date), max(ds_plot_reg$date)), 
+            width = "110%", timeFormat = "%d-%b-%Y")
+            )
+        )
+)
+
+# Set up data download
+data_for_dl <- reactive({
+  
+  dat <- df_sel() %>%
+    pivot_wider(
+      id_cols = date:regione, 
+      names_from = vars, 
+      values_from = value)
+  
+})
+
+output$downloadCSV <- downloadHandler(
+  filename = "data.csv", 
+  content = function(file) {
+    write_csv(data_for_dl(), file)
+  }
+)
+downloadLink("downloadCSV", label = "Download CSV dati Covid-19")
+```
+
+Nella pagina [__Grafici Andamento__](#grafici-andamento) è possibile selezionare la regione (compreso il dato nazionale "Italia") e il dato di cui visualizzare l'andamento dall'inizio dell'epidemia. I quattro grafici rappresentano:
+
+* I *Dati Cumulativi* dall'inizio dell'epidemia;
+* I *Dati Giornalieri* per ogni giorno dall'inizio dell'epidemia;
+* I *Dati Cumulativi Standardizzati* per la popolazione della regione selezionata;
+* I *Dati Giornalieri Standardizzati*.
+
+Nella pagina [__Tasso di Mortalità__](#tasso-di-mortalità) sono rappresentati i tassi di mortalità per milione di abitante per l'anno 2017 per tutte le cause di morte (fonte ISTAT). In rosso è indicato il tasso di mortalità da infezione Covid-19 fino alla data attuale (fonte Protezione Civile).
+
+Nella pagina [__Tasso di Fatalità__](#tasso-di-fatalità) per le regioni selezionate sono  rappresentati il _Tasso di Fatalità_, 
+la _Percentuale di Ospedalizzazioni_ e la _percentuale di Ricoveri in Terapia Intensiva_.
+
+Nella pagina [__Andamento per Regione__](#andamento-per-regione) è possibile visualizzare i dati per tutte le rioni dall'inizio dell'epidemia. Per ogni regione, l'inizio dell'epidemia Covid-19 è stato considerato il giorno nel quale sono stati raggiunti i **10 casi per milione di popolazione**.
+
+Nella pagina [__Fonte dei Dati__](#fonte-dei-dati) sono  riportate tutte le fonti dei dati visualizzati nella presetne applicazione.
+
+
+Grafici Andamento {data-icon="fa-chart-line"}
+======================================================================
+
+```{r}
+valueData <- ds_covid_nat %>% 
+  arrange(date) %>%
+  slice(n()) 
+```
+
+Row {data-width=150}
+----------------------------------------------------------------------
+
+### Cum Incidence
+```{r}
+valueBox(value = paste(round(valueData$rate_cumIncidence*10,2),"pmp"),
+         #icon = ifelse(valueData$new_positive==0, "fa-minus", "fa-angle-up"),
+         caption = "Incidenza Cumulativa per milione di popolazione",
+         color =ifelse(valueData$new_positive==0, "success", "warning"))
+```
+
+### Day Incidence
+```{r}
+valueBox(value = paste(round(valueData$day_incidenceRate*10,2),"pmp"),
+         #icon = ifelse(valueData$new_positive==0, "fa-minus", "fa-angle-up"),
+         caption = "Incidenza giornaliera per milione di popolazione",
+         color =ifelse(valueData$new_positive==0, "success", "warning"))
+```
+
+### Mortality Rate
+```{r}
+valueBox(value = paste(round(valueData$rate_mortality*10,2),"pmp"),
+         #icon = ifelse(valueData$new_death==0, "fa-minus", "fa-angle-up"),
+         caption = "Tasso di Mortalità per milione di popolazione",
+         color =ifelse(valueData$new_death==0, "success", "danger"))
+```
+
+### Test Rate
+```{r}
+valueBox(value = paste(round(valueData$rate_test*10,2),"pmp"),
+         #icon = ifelse(valueData$new_test==0, "fa-minus", "fa-angle-up"),
+         caption = "Tasso di Tamponi per milione di popolazione",
+         color =ifelse(valueData$new_death==0, "success", "danger"))
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Dati Cumulativi
+
+```{r plot_cumTOT}
+ds_plot1 <- reactive({
+  dat <- df_sel() %>%
+    filter(set=="Cumulativi totali")
+})
+
+laby1 <- reactive({
+  lab <- ds_plot1() %>% 
+    mutate_if(is.factor, as.character)
+  
+  lab <- lab[1,"vars"]
+  })
+output$covid_plot1 <-  renderPlotly({
+        
+        fig_app <- plot_ly(ds_plot1(), x = ~date, color = ~code) %>%
+            add_trace(y = ~value,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      # text = rep(paste("<b>",reg(),"</b><br>",laby1()),each = length(unique(ds_plot_reg$date))),
+                      text = ~paste("<b>", regione,"</b><br>",vars), 
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.0f}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>",laby1(),"</b>"),
+                    tickformat = ".0f"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_plot1")
+```
+
+
+### Dati Giornalieri
+
+```{r plott_incTOT}
+ds_plot2 <- reactive({
+  dat <- df_sel() %>%
+    filter(set=="Giornalieri totali")
+})
+
+laby2 <- reactive({
+  lab <- ds_plot2() %>% 
+    mutate_if(is.factor, as.character)
+  
+  lab <- lab[1,"vars"]
+  })
+
+output$covid_plot2 <-  renderPlotly({
+        
+        fig_app <- plot_ly(ds_plot2(), x = ~date, color = ~code) %>%
+            add_trace(y = ~value,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      text = ~paste("<b>", regione,"</b><br>",vars),
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.0f}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>",laby2(),"</b>"),
+                    tickformat = ".0f"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_plot2")
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Dati Cumulativi Standardizzati
+    
+```{r plot_cumPMP}
+ds_plot3 <- reactive({
+  dat <- df_sel() %>%
+    filter(set=="Cumulativi standardizzati")
+})
+
+laby3 <- reactive({
+  lab <- ds_plot3() %>% 
+    mutate_if(is.factor, as.character)
+  
+  lab <- lab[1,"vars"]
+  })
+
+output$covid_plot3 <-  renderPlotly({
+        
+        fig_app <- plot_ly(ds_plot3(), x = ~date, color = ~code) %>%
+            add_trace(y = ~value,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      text = ~paste("<b>", regione,"</b><br>",vars),
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.2f}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>",laby3(),"</b>"),
+                    tickformat = ".2f"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_plot3")
+```
+    
+### Dati Giornalieri Standardizzati
+
+```{r plot_incPMP}
+ds_plot4 <- reactive({
+  dat <- df_sel() %>%
+    filter(set=="Giornalieri standardizzati")
+})
+
+laby4 <- reactive({
+  lab <- ds_plot4() %>% 
+    mutate_if(is.factor, as.character)
+  
+  lab <- lab[1,"vars"]
+  })
+
+output$covid_plot4 <-  renderPlotly({
+        
+        fig_app <- plot_ly(ds_plot4(), x = ~date, color = ~code) %>%
+            add_trace(y = ~value,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      text = ~paste("<b>", regione,"</b><br>",vars), 
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.2f}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>",laby4(),"</b>"),
+                    tickformat = ".2f"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_plot4")
+```
+
+
+Tasso di Mortalità {data-icon="fa-chart-bar"}
+======================================================================
+
+### Tassi di Mortalità per milione di popolazione
+```{r plot_mortRate}
+cov_pal <- pal_jama("default")(7)
+
+g <- ggplot(ds_mortality_nat, aes(x=reorder(death_cause, mortality_rate), y=mortality_rate, fill=col)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c(cov_pal[7],cov_pal[4])) +
+  labs(y = "Tasso Mortalità per milione di popolazione", x="") +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title = element_text(face = "bold"))
+
+p <- ggplotly(g) 
+
+style(p, 
+      hovertemplate = paste(
+        "<span style='font-size:14px'><b>%{y}</b></span><br>",
+        "<span style='font-size:12px'>Mortality Rate pmp</span><br><br>",
+        "<span style='font-size:25px'><b>%{x:.0f}</b></span>",
+        "<extra></extra>")
+      )
+```
+
+
+### Tassi di Mortalità per milione di popolazione {.mobile}
+```{r plot_mortRateMOB}
+cov_pal <- pal_jama("default")(7)
+
+ds_mortality_nat <- ds_mortality_nat %>%
+  mutate(death_cause2 = paste0(str_wrap(death_cause, width=65, exdent=2),"\n"))
+
+g <- ggplot(ds_mortality_nat, aes(x=reorder(death_cause2, mortality_rate), y=mortality_rate, fill=col)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c(cov_pal[7],cov_pal[4])) +
+  labs(y = "Tasso Mortalità per milione di popolazione", x="") +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.y = element_text(size=8),
+        axis.title = element_text(face = "bold"))
+
+p <- ggplotly(g) %>%
+  layout(margin = list(
+        l=150, 
+        b=50
+      ))
+
+style(p, 
+      hovertemplate = paste(
+        "<span style='font-size:14px'><b>%{y}</b></span><br>",
+        "<span style='font-size:12px'>Mortality Rate pmp</span><br><br>",
+        "<span style='font-size:25px'><b>%{x:.0f}</b></span>",
+        "<extra></extra>")
+      )
+```
+
+
+Tasso di Fatalità {data-icon="fa-chart-line"}
+======================================================================
+
+Row {data-height=550}
+----------------------------------------------------------------------
+
+### Tasso di Fatalità
+
+```{r plot_fatalityR}
+
+output$covid_fat <-  renderPlotly({
+        
+        fig_app <- plot_ly(df_sel_perc(), x = ~date, color = ~code) %>%
+            add_trace(y = ~`Tasso di Fatalità`,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      # text = rep(paste("<b>",reg(),"</b><br>",laby1()),each = length(unique(ds_plot_reg$date))),
+                      text = ~paste("<b>", regione,"</b><br>Tasso di Fatalità"), 
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.2%}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>Tasso di Fatalità</b>"),
+                    tickformat = "%"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_fat")
+```
+
+Row {data-height=450}
+----------------------------------------------------------------------
+   
+### Tasso di Ospedalizzazioni
+
+```{r plotHospR}
+output$covid_hosp <-  renderPlotly({
+        
+        fig_app <- plot_ly(df_sel_perc(), x = ~date, color = ~code) %>%
+            add_trace(y = ~`Tasso di Ospedalizzazioni`,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      # text = rep(paste("<b>",reg(),"</b><br>",laby1()),each = length(unique(ds_plot_reg$date))),
+                      text = ~paste("<b>", regione,"</b><br>Ospedalizzazioni (%)"), 
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.2%}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>Tasso di Ospedalizzazioni</b>"),
+                    tickformat = "%"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_hosp")
+```
+    
+### Tasso di Ricoveri Terapia Intensiva
+
+```{r plotICUR}
+output$covid_icu <-  renderPlotly({
+        
+        fig_app <- plot_ly(df_sel_perc(), x = ~date, color = ~code) %>%
+            add_trace(y = ~`Tasso di Ricoveri Terapia Intensiva`,
+                      type = "scatter",
+                      mode = "lines+markers", 
+                      # text = rep(paste("<b>",reg(),"</b><br>",laby1()),each = length(unique(ds_plot_reg$date))),
+                      text = ~paste("<b>", regione,"</b><br>Ricoveri in Terapia Intensiva (%)"), 
+                      hoverinfo = 'text',
+                      hovertemplate = paste(
+                          "<span style='font-size:12px'><b>%{x|%B %d}</b></span><br>",
+                          "<span style='font-size:14px'>%{text}</span><br><br>",
+                          "<span style='font-size:25px'><b>%{y:.2%}</b></span><br>",
+                          "<extra></extra>"),
+                      marker = list(size = 9), 
+                      line = list(width = 3)) %>% 
+            layout(
+                yaxis = list(
+                    title = paste("<b>Tasso di Ricoveri Terapia Intensiva</b>"),
+                    tickformat = "%"),
+                xaxis = list(
+                    title = "",
+                    tickformat = "<b>%d %b</b>"),
+                showlegend = TRUE)
+        
+        fig_app
+    })
+
+plotlyOutput("covid_icu")
+```
+
+
+Andamento per Regione {data-icon="fa-globe-africa"}
+======================================================================
+
+### Grafico per Regioni
+
+```{r IR_plot_reg}
+
+selectInput("set", "Dato da visualizzare:",
+            # choices = c("Total Cases", "Cumulative IR"),
+            choices = levels(ds_plot_reg$vars),
+            selectize = FALSE)
+
+
+output$geof_plot <-  renderPlotly({
+  g <- ggplot(df_sel_geo(), aes(x=day_start, y=value)) +
+    geom_line(size = 1, colour = cov_pal[4]) +
+    facet_geo(~ code, grid = italy_grid4, label = "name") +
+    labs(y=labygeo(), x = "Giorni dall'inizio dell'epidemia") +
+    theme_bw() +
+    theme(axis.title = element_text(face = "bold"),
+          strip.background = element_rect(size=.5),
+          strip.text = element_text(face = "bold"))
+  
+  
+  fig <- geofacet_plotly(g, italy_grid4) %>%
+  layout(margin = list(
+        l=100, 
+        b=125
+      ))
+  style(fig,
+        hovertemplate = paste(
+          "<span style='font-size:11px'><b>Day %{x:.0f}</b></span><br>",
+          "<span style='font-size:12px'><b>%{text}</b></span><br><br>",
+          "<span style='font-size:14px'><b>IR %{y:.2f}</b></span>",
+          "<extra></extra>")
+  )
+})
+
+plotlyOutput("geof_plot")
+```
+
+
+Info {data-icon=fa-info-circle"}
+====================================================================== 
+
+<font size="3">
+
+Quest'applicazione è stata sviluppata dell'Ing. Danilo Lofaro del [de-Health Lab](http://www.dehealthlab.it/) - [DIMEG (UNICAL)](https://www.unical.it/portale/strutture/dipartimenti_240/dimeg/) nell'ambito dell'iniziativa [UNICAL vs Covid](https://www.unicalvscovid.it/).
+
+<br>
+
+I dati analizzati in questa applicazione provengono da fonti ufficiali e aggiornati quotidianamente.   
+In particolare:
+ 
+ * i dati relativi all'epidemia da **Covid-19** sono messi a disposizione dalla protezione civile e accessibili alla repository GitHub [COVID-19](https://github.com/pcm-dpc/COVID-19).
+ 
+ * I dati relativi alla popolazione residente (anno 2019), sia a livello nazionale che regionale, sono messi a disposizione dall'ISTAT e accessibili all'indirizzo [http://dati.istat.it/QueryId=46313](http://dati.istat.it//Index.aspx?QueryId=46313).
+ 
+ * I dati relativi alle cause di morte (anno 2017) sono messi a disposizione dall'ISTAT e accessibili all'indirizzo [http://dati.istat.it/QueryId=46315](http://dati.istat.it//Index.aspx?QueryId=46315).
+ 
+<br>
+ 
+L'applicazione è stata costruita con il framework [Shiny](http://shiny.rstudio.com) per [R](https://www.r-project.org/). Il layout è stato prodotto con il pacchetto  [flexdashboard](http://rstudio.github.io/flexdashboard/index.html) e i grafici con i pacchetti [Plotly](http://plot.ly), [ggplot2](http://ggplot2.org/) e [geo-facet](https://hafen.github.io/geofacet/).
+
+<br>
+
+Eventuali feedback o suggerimenti possono essere inviati all'indirizzo [danilo.lofaro@unical.it](mailto:danilo.lofaro@unical.it)
+
+
+</font>
+
+
+
